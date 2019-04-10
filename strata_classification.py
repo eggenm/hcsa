@@ -34,7 +34,7 @@ def genClassifier(class_img, n = 10000):
 #     classifier = ee.Classifier.cart(prune = True).train(training, 'remapped')
 #     classifier = ee.Classifier.svm(kernelType = 'RBF', gamma = 0.5, 
 #                                    cost = 10).train(training, 'remapped')
-    classifier = ee.Classifier.randomForest(30).train(training, 'remapped')
+    classifier = ee.Classifier.randomForest(200).train(training, 'remapped')
     return classifier
 
 def validate(classifier, val_img, n = 5000):
@@ -137,28 +137,9 @@ fc = ee.FeatureCollection(list(feature_dict.values()))
 all_study_area = fc.geometry().bounds()
 all_json_coords = all_study_area.getInfo()['coordinates']
 
-bands = ['swir1', 'nir', 'red', 'pan', 'swir2', 'blue', 'cirrus', 'aerosol', 
-         'green', 'tir1', 'tir2', 'ndvi', 'remapped']
-img_dict = {site: ee.Image('users/rheilmayr/indonesia/' + site + '_toClass').select(bands) \
-            for site in sites}
-for site in sites:
-    img_dict[site] = img_dict[site].set({'site': site})
-    
-site = 'app_riau'
-strata_img = ee.Image(hcs_db.rasters[site])
-strata_img = strata_img.remap(from_vals, to_vals, 4)
-all_site = 'app_all'
-all_strata_img = ee.Image(hcs_db.rasters[all_site])
-all_study_area = all_strata_img.geometry().bounds()
-
-geometry = strata_img.geometry()
-coords = geometry.coordinates()
-json_coords = coords.getInfo()
-center = geometry.centroid()
-study_area = geometry.bounds()
-center_lng = center.coordinates().get(0)
-center_lat = center.coordinates().get(1)
-
+# =============================================================================
+# Prep landsat data
+# =============================================================================
 ic = ee.ImageCollection('LANDSAT/LC08/C01/T2_SR')
 ic = ic.filterDate('2010-01-01', '2016-06-01')
 ic = ic.filterMetadata(name = 'WRS_ROW', operator = 'less_than', value = 120)
@@ -166,19 +147,26 @@ ic = ic.filterBounds(all_study_area)
 ic_masked = ic.map(prep_ls8)
 clean_img = ic_masked.qualityMosaic('ndvi')
 
-## Exporting image for eventual classification and display - should be done for all plots
-strata_img = strata_img.float()
-class_img = clean_img.addBands(strata_img)
-export = ee.batch.Export.image.toAsset(class_img, scale = 30, region = json_coords,
-                                       assetId = 'users/rheilmayr/hcs_out/' + site + '_toClass',
-                                       maxPixels = 1e13)
-export.start()
+# =============================================================================
+# Create site-level images for classification with reclassed strata and landsat data
+# =============================================================================
+for site, strata_img in hcs_db.rasters.items():
+    strata_img = ee.Image(strata_img)
+    strata_img = strata_img.remap(from_vals, to_vals, 4)
+    geometry = strata_img.geometry()
+    coords = geometry.coordinates()
+    json_coords = coords.getInfo()
+    strata_img = strata_img.float()
+    class_img = clean_img.addBands(strata_img)
+    export = ee.batch.Export.image.toAsset(class_img, scale = 30, region = json_coords,
+                                           assetId = 'users/rheilmayr/hcs_out/' + site + '_toClass',
+                                           maxPixels = 1e13)
+    export.start()
 
 # =============================================================================
 # Jackknife classification
 # =============================================================================
-## NEED TO UPDATE TO USE UPDATE LANDSAT 8 COMPOSITES
-bands = ['swir1', 'nir', 'red', 'pan', 'swir2', 'blue', 'cirrus', 'aerosol', 
+bands = ['swir1', 'nir', 'red', 'pan', 'swir2', 'blue',
          'green', 'tir1', 'tir2', 'ndvi', 'remapped']
 img_dict = {site: ee.Image('users/rheilmayr/indonesia/' + site + '_toClass').select(bands) \
             for site in sites}
@@ -189,7 +177,7 @@ out_point_dict = {}
 for test_site in sites:
     train_sites = [site for site in sites if site != test_site]
     train_imgs = {site: img_dict[site] for site in train_sites}
-    train_classifier = genClassifierMultisite(train_imgs, bands, 1000)
+    train_classifier = genClassifierMultisite(train_imgs, bands, 50000)
     testAccuracy = validate(train_classifier, img_dict[test_site], 5000)
     out_point = ee.Feature(ee.Geometry.Point(0, 0))
     out_dict = {str(n) + str(m): testAccuracy.array().get([n,m]) for n in range(4) for m in range(4)}
@@ -200,9 +188,10 @@ for test_site in sites:
                      'c_acc': testAccuracy.consumersAccuracy()})
     out_point = out_point.set(out_dict)
     out_point_dict[test_site] = out_point
+out_point_dict['app_jambi'].getInfo()
 
 # =============================================================================
-# Look at results if you use same site for classifciation and testing
+# Compare to results if you use same site for classifciation and testing
 # =============================================================================
 for test_site in sites:
     train_sites = [site for site in sites if site == test_site]
@@ -218,3 +207,4 @@ for test_site in sites:
                      'c_acc': testAccuracy.consumersAccuracy()})
     out_point = out_point.set(out_dict)
     out_point_dict[test_site] = out_point
+out_point_dict['app_jambi'].getInfo()
