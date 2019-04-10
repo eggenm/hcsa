@@ -163,13 +163,17 @@ for site, strata_img in hcs_db.rasters.items():
                                            maxPixels = 1e13)
     export.start()
 
+### Note: Current version of code using ned Landsat 8 surface reflectance product 
+### is providng way worse results than old version that relied on deprecated
+### Landsat 8 products. Need to update code to create a useable product. 
+    
 # =============================================================================
 # Jackknife classification
 # =============================================================================
 bands = ['swir1', 'nir', 'red', 'pan', 'swir2', 'blue',
          'green', 'tir1', 'tir2', 'ndvi', 'remapped']
 img_dict = {site: ee.Image('users/rheilmayr/indonesia/' + site + '_toClass').select(bands) \
-            for site in sites}
+            for site in sites} ## Note - using old landsat files because new exports are a mess
 for site in sites:
     img_dict[site] = img_dict[site].set({'site': site})
     
@@ -190,21 +194,45 @@ for test_site in sites:
     out_point_dict[test_site] = out_point
 out_point_dict['app_jambi'].getInfo()
 
+## =============================================================================
+## Compare to results if you use same site for classifciation and testing
+## =============================================================================
+#for test_site in sites:
+#    train_sites = [site for site in sites if site == test_site]
+#    train_imgs = {site: img_dict[site] for site in train_sites}
+#    train_classifier = genClassifierMultisite(train_imgs, bands, 1000)
+#    testAccuracy = validate(train_classifier, img_dict[test_site], 5000)
+#    out_point = ee.Feature(ee.Geometry.Point(0, 0))
+#    out_dict = {str(n) + str(m): testAccuracy.array().get([n,m]) for n in range(4) for m in range(4)}
+#    out_dict.update({'test_site': test_site,
+#                     'kappa': testAccuracy.kappa(),
+#                     'acc': testAccuracy.accuracy(),
+#                     'p_acc': testAccuracy.producersAccuracy(),
+#                     'c_acc': testAccuracy.consumersAccuracy()})
+#    out_point = out_point.set(out_dict)
+#    out_point_dict[test_site] = out_point
+#out_point_dict['app_jambi'].getInfo()
+
 # =============================================================================
-# Compare to results if you use same site for classifciation and testing
+# Export accuracy metrics
 # =============================================================================
-for test_site in sites:
-    train_sites = [site for site in sites if site == test_site]
-    train_imgs = {site: img_dict[site] for site in train_sites}
-    train_classifier = genClassifierMultisite(train_imgs, bands, 1000)
-    testAccuracy = validate(train_classifier, img_dict[test_site], 5000)
-    out_point = ee.Feature(ee.Geometry.Point(0, 0))
-    out_dict = {str(n) + str(m): testAccuracy.array().get([n,m]) for n in range(4) for m in range(4)}
-    out_dict.update({'test_site': test_site,
-                     'kappa': testAccuracy.kappa(),
-                     'acc': testAccuracy.accuracy(),
-                     'p_acc': testAccuracy.producersAccuracy(),
-                     'c_acc': testAccuracy.consumersAccuracy()})
-    out_point = out_point.set(out_dict)
-    out_point_dict[test_site] = out_point
-out_point_dict['app_jambi'].getInfo()
+out_point_dict = gee_tools.dict_to_eedict(out_point_dict)
+acc_fc = ee.FeatureCollection(out_point_dict.values())
+export = ee.batch.Export.table.toDrive(acc_fc, folder = 'hcs', description = 'jackknife_acc',
+                                       fileNamePrefix = 'jackknife1e6_rf', fileFormat = 'csv')
+export.start()
+
+# =============================================================================
+# Export classified images
+# =============================================================================
+classifier = genClassifierMultisite(img_dict, bands, 3000)
+for site in sites:
+    to_class = img_dict[site]
+    mask = to_class.select('remapped').mask()
+    to_class = to_class.updateMask(mask)
+    classed_img = to_class.classify(classifier)
+    site_json_coords = feature_dict[site].geometry().bounds().getInfo()['coordinates']
+    export = ee.batch.Export.image.toAsset(classed_img, description = site + '_class', scale = 30, region = site_json_coords,
+                                       assetId = 'users/rheilmayr/indonesia/' + site + '_class_30',
+                                       maxPixels = 1e13)
+    export.start()
