@@ -15,16 +15,23 @@ import hcs_database as hcs_db
 import pandas as pd
 
 # =============================================================================
+# Define paths
+# =============================================================================
+in_path = 'users/rheilmayr/indonesia/'
+out_path = 'users/rheilmayr/hcs_out/'
+
+# =============================================================================
 # Define functions
 # =============================================================================
 def genClassifierMultisite(img_dict, bands, n_site = 2000):
     training = ee.FeatureCollection([])
     for site, img in img_dict.items():
         bounds = img.geometry().bounds()
-        site_training = img.sample(numPixels = n_site, seed = 0, scale = 30, 
-                                   region = bounds)
+        site_training = img.stratifiedSample(numPoints = n_site, seed = 0, 
+                                             scale = 30, region = bounds, classBand = 'remapped')
         training = training.merge(site_training)
-    classifier = ee.Classifier.randomForest(30).train(training, 'remapped', inputProperties = bands)
+#    classifier = ee.Classifier.cart(prune = True).train(training, 'remapped', inputProperties = bands)
+    classifier = ee.Classifier.randomForest(100).train(training, 'remapped', inputProperties = bands)
     return classifier    
 
 def genClassifier(class_img, n = 10000):
@@ -48,7 +55,7 @@ def validate(classifier, val_img, n = 5000):
 class validate_map:
     def __init__(self, class_site, class_n = 10000, val_n = 5000):
         self.class_site = class_site
-        self.class_img = ee.Image('users/rheilmayr/indonesia/' + class_site + '_toClass')
+        self.class_img = ee.Image(out_path + class_site + '_toClass')
         self.classifier = genClassifier(self.class_img, class_n)
         self.val_n = val_n
     def __call__(self, val_img):
@@ -159,7 +166,7 @@ for site, strata_img in hcs_db.rasters.items():
     strata_img = strata_img.float()
     class_img = clean_img.addBands(strata_img)
     export = ee.batch.Export.image.toAsset(class_img, scale = 30, region = json_coords,
-                                           assetId = 'users/rheilmayr/hcs_out/' + site + '_toClass',
+                                           assetId = out_path + site + '_toClass',
                                            maxPixels = 1e13)
     export.start()
 
@@ -172,7 +179,7 @@ for site, strata_img in hcs_db.rasters.items():
 # =============================================================================
 bands = ['swir1', 'nir', 'red', 'pan', 'swir2', 'blue',
          'green', 'tir1', 'tir2', 'ndvi', 'remapped']
-img_dict = {site: ee.Image('users/rheilmayr/indonesia/' + site + '_toClass').select(bands) \
+img_dict = {site: ee.Image(in_path + site + '_toClass').select(bands) \
             for site in sites} ## Note - using old landsat files because new exports are a mess
 for site in sites:
     img_dict[site] = img_dict[site].set({'site': site})
@@ -181,7 +188,7 @@ out_point_dict = {}
 for test_site in sites:
     train_sites = [site for site in sites if site != test_site]
     train_imgs = {site: img_dict[site] for site in train_sites}
-    train_classifier = genClassifierMultisite(train_imgs, bands, 50000)
+    train_classifier = genClassifierMultisite(train_imgs, bands, 10000)
     testAccuracy = validate(train_classifier, img_dict[test_site], 5000)
     out_point = ee.Feature(ee.Geometry.Point(0, 0))
     out_dict = {str(n) + str(m): testAccuracy.array().get([n,m]) for n in range(4) for m in range(4)}
@@ -192,8 +199,96 @@ for test_site in sites:
                      'c_acc': testAccuracy.consumersAccuracy()})
     out_point = out_point.set(out_dict)
     out_point_dict[test_site] = out_point
-out_point_dict['app_jambi'].getInfo()
+out_acc = out_point_dict['app_jambi'].getInfo()
 
+# =============================================================================
+# Presentation prep - temporary
+# =============================================================================
+test_site = 'app_riau'
+train_sites = ['app_jambi']
+train_imgs = {site: img_dict[site].cast(ee.Dictionary({'remapped': "int8"})) for site in train_sites}
+train_classifier = genClassifierMultisite(train_imgs, bands, 5000)
+testAccuracy = validate(train_classifier, img_dict[test_site], 20000)
+out_point = ee.Feature(ee.Geometry.Point(0, 0))
+out_dict = {str(n) + str(m): testAccuracy.array().get([n,m]) for n in range(4) for m in range(4)}
+out_dict.update({'test_site': test_site,
+                 'kappa': testAccuracy.kappa(),
+                 'acc': testAccuracy.accuracy(),
+                 'p_acc': testAccuracy.producersAccuracy(),
+                 'c_acc': testAccuracy.consumersAccuracy()})
+out_point = out_point.set(out_dict)
+out_acc_same = out_point.getInfo()
+print(out_acc_same)
+
+train_sites = ['app_kalbar']
+train_imgs = {site: img_dict[site].cast(ee.Dictionary({'remapped': "int8"})) for site in train_sites}
+train_classifier = genClassifierMultisite(train_imgs, bands, 5000)
+testAccuracy = validate(train_classifier, img_dict[test_site], 20000)
+out_point = ee.Feature(ee.Geometry.Point(0, 0))
+out_dict = {str(n) + str(m): testAccuracy.array().get([n,m]) for n in range(4) for m in range(4)}
+out_dict.update({'test_site': test_site,
+                 'kappa': testAccuracy.kappa(),
+                 'acc': testAccuracy.accuracy(),
+                 'p_acc': testAccuracy.producersAccuracy(),
+                 'c_acc': testAccuracy.consumersAccuracy()})
+out_point = out_point.set(out_dict)
+out_acc_one = out_point.getInfo()
+print(out_acc_one)
+
+train_sites = ['app_jambi', 'app_oki', 'crgl_stal']
+train_imgs = {site: img_dict[site].cast(ee.Dictionary({'remapped': "int8"})) for site in train_sites}
+train_classifier = genClassifierMultisite(train_imgs, bands, 5000)
+testAccuracy = validate(train_classifier, img_dict[test_site], 20000)
+out_point = ee.Feature(ee.Geometry.Point(0, 0))
+out_dict = {str(n) + str(m): testAccuracy.array().get([n,m]) for n in range(4) for m in range(4)}
+out_dict.update({'test_site': test_site,
+                 'kappa': testAccuracy.kappa(),
+                 'acc': testAccuracy.accuracy(),
+                 'p_acc': testAccuracy.producersAccuracy(),
+                 'c_acc': testAccuracy.consumersAccuracy()})
+out_point = out_point.set(out_dict)
+out_acc_sumat = out_point.getInfo()
+print(out_acc_sumat)
+
+train_sites = ['app_kaltim', 'app_kalbar', 'app_jambi', 'app_oki', 'crgl_stal', 
+               'app_muba']
+train_imgs = {site: img_dict[site].cast(ee.Dictionary({'remapped': "int8"})) for site in train_sites}
+train_classifier = genClassifierMultisite(train_imgs, bands, 5000)
+testAccuracy = validate(train_classifier, img_dict[test_site], 20000)
+out_point = ee.Feature(ee.Geometry.Point(0, 0))
+out_dict = {str(n) + str(m): testAccuracy.array().get([n,m]) for n in range(4) for m in range(4)}
+out_dict.update({'test_site': test_site,
+                 'kappa': testAccuracy.kappa(),
+                 'acc': testAccuracy.accuracy(),
+                 'p_acc': testAccuracy.producersAccuracy(),
+                 'c_acc': testAccuracy.consumersAccuracy()})
+out_point = out_point.set(out_dict)
+out_acc_indo = out_point.getInfo()
+print(out_acc_indo)
+
+train_sites = ['app_kaltim', 'app_kalbar', 'app_jambi', 'app_oki', 'crgl_stal', 
+               'app_muba']
+train_imgs = {site: img_dict[site].cast(ee.Dictionary({'remapped': "int8"})) for site in train_sites}
+train_classifier = genClassifierMultisite(train_imgs, bands, 5000)
+testAccuracy = validate(train_classifier, img_dict[test_site], 20000)
+out_point = ee.Feature(ee.Geometry.Point(0, 0))
+out_dict = {str(n) + str(m): testAccuracy.array().get([n,m]) for n in range(4) for m in range(4)}
+out_dict.update({'test_site': test_site,
+                 'kappa': testAccuracy.kappa(),
+                 'acc': testAccuracy.accuracy(),
+                 'p_acc': testAccuracy.producersAccuracy(),
+                 'c_acc': testAccuracy.consumersAccuracy()})
+out_point = out_point.set(out_dict)
+out_acc_world = out_point.getInfo()
+print(out_acc_world)
+
+import matplotlib.pyplot as plt
+import pandas as pd
+df = pd.Series({'Same plot': 94,
+                   'South Sumatra plot': 64,
+                   'All Sumatra plots': 70,
+                   'All Indonesia and PNG plots': 72,
+                   'Nigeria plot': 20}) 
 ## =============================================================================
 ## Compare to results if you use same site for classifciation and testing
 ## =============================================================================
@@ -233,6 +328,6 @@ for site in sites:
     classed_img = to_class.classify(classifier)
     site_json_coords = feature_dict[site].geometry().bounds().getInfo()['coordinates']
     export = ee.batch.Export.image.toAsset(classed_img, description = site + '_class', scale = 30, region = site_json_coords,
-                                       assetId = 'users/rheilmayr/indonesia/' + site + '_class_30',
+                                       assetId = out_path + site + '_class_30',
                                        maxPixels = 1e13)
     export.start()
