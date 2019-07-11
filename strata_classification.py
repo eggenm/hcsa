@@ -13,12 +13,14 @@ ee.Initialize()
 import numpy as np
 import hcs_database as hcs_db
 import pandas as pd
+import requests
+import zipfile
 
 # =============================================================================
 # Define paths
 # =============================================================================
 in_path = 'users/rheilmayr/indonesia/'
-out_path = 'users/eggenm/hcs_out/'
+out_path = '/Users/Eggen/Dropbox/HCSproject/data/PoC'
 
 # =============================================================================
 # Define date range
@@ -209,7 +211,7 @@ def add_ndvi(img, keys, values, platform):
 # =============================================================================
 # Load study data
 # =============================================================================
-key_csv = 'C:/Users/Eggen/Dropbox/HCSproject/data/strata_key.csv'
+key_csv = '/Users/Eggen/Dropbox/HCSproject/data/strata_key.csv'
 key_df = pd.read_csv(key_csv)
 from_vals = list(key_df['project_code'].astype(float).values)
 to_vals = list(key_df['code_simpl'].astype(float).values)
@@ -218,7 +220,7 @@ to_vals = list(key_df['code_simpl'].astype(float).values)
 #         'app_muba', 
 #         'app_riau',
 #         'crgl_stal', 'gar_pgm', 'nbpol_ob', 'wlmr_calaro']
-sites = ['gar_pgm']
+sites = ['app_kalbar']
   
 feature_dict = {}
 for site in sites:
@@ -239,7 +241,8 @@ ic = ic.filterMetadata(name = 'WRS_ROW', operator = 'less_than', value = 120)
 ic = ic.filterBounds(all_study_area)
 ic_masked = ic.map(prep_ls8)
 clean_l8_img = ee.Image(ic_masked.qualityMosaic('ndvi_l8'))
-#print(clean_l8_img.bandNames().getInfo())
+print(clean_l8_img.bandNames().getInfo())
+
 
 # =============================================================================
 # Prep SAR data
@@ -283,13 +286,45 @@ for site in sites:
     coords = geometry.coordinates()
     json_coords = coords.getInfo()
     strata_img = strata_img.int()
-    class_img = clean_l8_img.addBands(strata_img).addBands(radar_composite).addBands(clean_s2_img)
+    
+    #print(clean_l8_img)
+    class_img = clean_l8_img.addBands(radar_composite).addBands(clean_s2_img)
+    
+    #class_img = clean_s2_img
     img_dict[site]=ee.Image(class_img).select(bands)
-#    export = ee.batch.Export.image.toAsset(class_img, scale = 30, region = json_coords,
-#                                          assetId = out_path + site + str(year) +'_input_wRadar_andS2',
+    prefix = site +'_input'
+    url = class_img.clip(geometry).getDownloadURL({'name': prefix, 'crs': 'EPSG:4326', 'scale': 30})
+    #print(url)
+    
+    filename1=out_path+'/'+site+'/'+prefix+'.zip'
+    r = requests.get(url, stream=True)
+    with open(filename1, 'wb') as fd:
+        for chunk in r.iter_content(chunk_size=1024):
+            fd.write(chunk)
+    
+    
+    prefix = site +'_classRemap'
+    filename2=out_path+'/'+site+'/'+prefix+'.zip'
+    url = strata_img.clip(geometry).getDownloadURL({'name': prefix, 'crs': 'EPSG:4326', 'scale': 30})
+    r = requests.get(url, stream=True)
+    with open(filename2, 'wb') as fd:
+        for chunk in r.iter_content(chunk_size=1024):
+            fd.write(chunk)
+    # Extract the GeoTIFF for the zipped download
+    z = zipfile.ZipFile(filename1)
+    z.extractall(path=out_path+'/'+site)
+    # Extract the GeoTIFF for the zipped download
+    z = zipfile.ZipFile(filename2)
+    z.extractall(path=out_path+'/'+site)
+    #print(url)
+#    export = ee.batch.Export.image.toDrive(image=clean_l8_img, scale = 30, region = json_coords, folder='Indonesia',
+#                                           fileNamePrefix='clean_l8_img',
+#                                           maxPixels = 1e13)
+#    export = ee.batch.Export.image.toDrive(image=strata_img, folder='Indonesia', fileNamePrefix='remapImage',scale = 30, region = json_coords, 
+#                                           #assetId = out_path + site +'_remapImage',
 #                                           maxPixels = 1e13)
 #    export.start()
-
+print(out_path + site + str(year) +'_input_wRadar_andS2')
 ### Note: Current version of code using ned Landsat 8 surface reflectance product 
 ### is providng way worse results than old version that relied on deprecated
 ### Landsat 8 products. Need to update code to create a useable product. 
@@ -297,26 +332,26 @@ for site in sites:
 # =============================================================================
 # Jackknife classification
 # =============================================================================
-
-img_dict = {site: ee.Image(out_path + site + str(year) + '_input_wRadar_andS2',).select(bands) \
-           for site in sites} ## Note - using old landsat files because new exports are a mess
-for site in sites:
-    img_dict[site] = img_dict[site].set({'site': site})
-out_point_dict = {}
-for test_site in sites:
-    train_sites = [site for site in sites if site != test_site]
-    train_imgs = {site: img_dict[site] for site in train_sites}
-    train_classifier = genClassifierMultisite(train_imgs, bands, 10000)
-    testAccuracy = validate(train_classifier, img_dict[test_site], 5000)
-    out_point = ee.Feature(ee.Geometry.Point(0, 0))
-    out_dict = {str(n) + str(m): testAccuracy.array().get([n,m]) for n in range(4) for m in range(4)}
-    out_dict.update({'test_site': test_site,
-                     'kappa': testAccuracy.kappa(),
-                     'acc': testAccuracy.accuracy(),
-                     'p_acc': testAccuracy.producersAccuracy(),
-                     'c_acc': testAccuracy.consumersAccuracy()})
-    out_point = out_point.set(out_dict)
-    out_point_dict[test_site] = out_point
+#
+#img_dict = {site: ee.Image(out_path + site + str(year) + '_input_wRadar_andS2',).select(bands) \
+#           for site in sites} ## Note - using old landsat files because new exports are a mess
+#for site in sites:
+#    img_dict[site] = img_dict[site].set({'site': site})
+#out_point_dict = {}
+#for test_site in sites:
+#    train_sites = [site for site in sites if site != test_site]
+#    train_imgs = {site: img_dict[site] for site in train_sites}
+#    train_classifier = genClassifierMultisite(train_imgs, bands, 10000)
+#    testAccuracy = validate(train_classifier, img_dict[test_site], 5000)
+#    out_point = ee.Feature(ee.Geometry.Point(0, 0))
+#    out_dict = {str(n) + str(m): testAccuracy.array().get([n,m]) for n in range(4) for m in range(4)}
+#    out_dict.update({'test_site': test_site,
+#                     'kappa': testAccuracy.kappa(),
+#                     'acc': testAccuracy.accuracy(),
+#                     'p_acc': testAccuracy.producersAccuracy(),
+#                     'c_acc': testAccuracy.consumersAccuracy()})
+#    out_point = out_point.set(out_dict)
+#    out_point_dict[test_site] = out_point
 #out_acc = out_point_dict['app_jambi'].getInfo()
 
 # =============================================================================
@@ -440,16 +475,16 @@ df = pd.Series({'Same plot': 94,
 # =============================================================================
 # Export classified images
 # =============================================================================
-classifier = genClassifierMultisite(img_dict, bands, 3000)
-for site in sites:
-    to_class = img_dict[site]
-    mask = to_class.select('remapped').mask()
-    to_class = to_class.updateMask(mask)
-    classed_img = to_class.classify(classifier)
-    site_json_coords = feature_dict[site].geometry().bounds().getInfo()['coordinates']
-    print(site_json_coords)
-    export = ee.batch.Export.image.toAsset(classed_img, description = site + '_ClassW_radar_s2', scale = 30, region = site_json_coords,
-                                       assetId = out_path + site + str(year) + '_ClassW_radar_s2',
-                                       maxPixels = 1e13)
-    export.start()
-print(out_path + site + str(year) + '_ClassW_radar_s2')
+#classifier = genClassifierMultisite(img_dict, bands, 3000)
+#for site in sites:
+#    to_class = img_dict[site]
+#    mask = to_class.select('remapped').mask()
+#    to_class = to_class.updateMask(mask)
+#    classed_img = to_class.classify(classifier)
+#    site_json_coords = feature_dict[site].geometry().bounds().getInfo()['coordinates']
+#    print(site_json_coords)
+#    export = ee.batch.Export.image.toAsset(classed_img, description = site + '_ClassW_radar_s2', scale = 30, region = site_json_coords,
+#                                       assetId = out_path + site + str(year) + '_ClassW_radar_s2',
+#                                       maxPixels = 1e13)
+#    export.start()
+#print(out_path + site + str(year) + '_ClassW_radar_s2')
